@@ -80,6 +80,34 @@ body {
   color: #667eea;
 }
 
+.reset-button {
+  padding: 8px 16px;
+  border-radius: 6px;
+  border: 2px solid rgba(255, 255, 255, 0.8);
+  background: rgba(255, 255, 255, 0.1);
+  color: white;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  white-space: nowrap;
+  font-size: 0.9em;
+}
+
+.reset-button:hover:not(:disabled) {
+  background: rgba(255, 77, 77, 0.9);
+  border-color: white;
+  transform: translateY(-1px);
+}
+
+.reset-button:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+.reset-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .user-selector {
   display: flex;
   align-items: center;

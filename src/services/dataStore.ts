@@ -345,6 +345,16 @@ class DataStore {
       total: auctionSize + bidSize + userSize,
     };
   }
+
+  /**
+   * Reset all data (for testing purposes after deployment)
+   */
+  resetAllData(): void {
+    this.auctions.clear();
+    this.bids.clear();
+    this.users.clear();
+    logger.info('🔄 All data has been reset (auctions, bids, users)');
+  }
 }
 
 // Export singleton instance

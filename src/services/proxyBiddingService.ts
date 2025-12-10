@@ -127,7 +127,7 @@ class ProxyBiddingService {
    */
   async triggerProxyCounterBids(
     _auction: Auction,
-    newBid: Bid
+    _newBid: Bid
   ): Promise<Array<{userId: string; amount: number; maxBid: number | null; autoBidStep: number | null}>> {
     // TRADERA BEHAVIOR: No automatic counter-bid chains
     // When B places max bid of 200 and beats A's max of 150,
@@ -135,9 +135,7 @@ class ProxyBiddingService {
     //
     // A would only bid again if A manually increases their max bid.
 
-    logger.info(
-      `🔍 Tradera-style bidding: No counter-bids triggered for bid $${newBid.amount / 100} by ${newBid.userId}`
-    );
+    logger.info(`🔍 Tradera-style bidding: No counter-bids triggered (disabled for Tradera behavior)`);
 
     return []; // No counter-bids in Tradera system
   }

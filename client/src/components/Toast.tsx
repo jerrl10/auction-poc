@@ -6,23 +6,61 @@ export interface ToastProps {
   type: 'success' | 'error' | 'info' | 'warning';
   onClose: () => void;
   duration?: number;
+  title?: string;
+  action?: {
+    label: string;
+    onClick: () => void;
+  };
 }
 
-export function Toast({ message, type, onClose, duration = 5000 }: ToastProps) {
+export function Toast({ message, type, onClose, duration = 5000, title, action }: ToastProps) {
   useEffect(() => {
+    // Don't auto-close warning/error toasts - user should explicitly dismiss
+    if (type === 'error' || type === 'warning') {
+      return;
+    }
+
     const timer = setTimeout(onClose, duration);
     return () => clearTimeout(timer);
-  }, [duration, onClose]);
+  }, [duration, onClose, type]);
 
   return (
-    <div className={`toast toast-${type}`}>
-      <div className="toast-content">
-        <span className="toast-icon">{getIcon(type)}</span>
-        <span className="toast-message">{message}</span>
+    <div className={`toast toast-${type} toast-enhanced`} role="alert">
+      <div className="toast-header">
+        <span className="toast-icon-large">{getIcon(type)}</span>
+        <div className="toast-title-section">
+          {title && <div className="toast-title">{title}</div>}
+          <div className="toast-message">{message}</div>
+        </div>
+        <button
+          className="toast-close"
+          onClick={onClose}
+          aria-label="Close notification"
+        >
+          ×
+        </button>
       </div>
-      <button className="toast-close" onClick={onClose}>
-        ×
-      </button>
+      {action && (
+        <div className="toast-action">
+          <button
+            className="toast-action-btn"
+            onClick={() => {
+              action.onClick();
+              onClose();
+            }}
+          >
+            {action.label}
+          </button>
+        </div>
+      )}
+      {(type === 'success' || type === 'info') && (
+        <div className="toast-progress">
+          <div
+            className="toast-progress-bar"
+            style={{ animationDuration: `${duration}ms` }}
+          />
+        </div>
+      )}
     </div>
   );
 }

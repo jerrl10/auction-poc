@@ -16,10 +16,33 @@ import { swaggerSpec } from './swagger';
 import auctionsRouter from './routes/auctions';
 import bidsRouter from './routes/bids';
 import usersRouter from './routes/users';
+import adminRouter from './routes/admin';
 
 const app = express();
 
+// CORS Configuration
+// const allowedOrigins = [
+//   'http://localhost:5173', // Local development
+//   'http://localhost:3000', // Local backend
+//   process.env.FRONTEND_URL, // Production frontend URL from env
+// ].filter(Boolean); // Remove undefined values
+
+// const corsOptions = {
+//   origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
+//     // Allow requests with no origin (like mobile apps, curl, Postman)
+//     if (!origin) return callback(null, true);
+
+//     if (allowedOrigins.indexOf(origin) !== -1 || process.env.NODE_ENV === 'development') {
+//       callback(null, true);
+//     } else {
+//       callback(new Error('Not allowed by CORS'));
+//     }
+//   },
+//   credentials: true,
+// };
+
 // Middleware
+// app.use(cors(corsOptions));
 app.use(cors());
 app.use(express.json());
 
@@ -48,6 +71,7 @@ app.get('/health', (_req, res) => {
 app.use('/api/auctions', auctionsRouter);
 app.use('/api/bids', bidsRouter);
 app.use('/api/users', usersRouter);
+app.use('/api/admin', adminRouter);
 
 // Test endpoint: Get data store statistics
 app.get('/test/stats', (_req, res) => {

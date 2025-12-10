@@ -1,9 +1,11 @@
 import { BrowserRouter, Routes, Route, Link, useLocation } from 'react-router-dom';
+import { useState } from 'react';
 import { AuctionList } from './pages/AuctionList';
 import { AuctionDetail } from './pages/AuctionDetail';
 import { CreateUser } from './pages/CreateUser';
 import { CreateAuction } from './pages/CreateAuction';
 import { UserProvider, useUser } from './contexts/UserContext';
+import { auctionApi } from './services/api';
 import './App.css';
 
 function UserSelector() {
@@ -30,6 +32,24 @@ function UserSelector() {
 
 function Navigation() {
   const location = useLocation();
+  const [resetting, setResetting] = useState(false);
+
+  const handleReset = async () => {
+    if (!confirm('⚠️ This will DELETE all data (users, auctions, bids). Continue?')) {
+      return;
+    }
+
+    setResetting(true);
+    try {
+      await auctionApi.resetAllData();
+      alert('✅ All data has been reset! Refreshing page...');
+      window.location.reload();
+    } catch (error: any) {
+      alert(`❌ Failed to reset data: ${error.message}`);
+    } finally {
+      setResetting(false);
+    }
+  };
 
   return (
     <nav className="app-nav">
@@ -42,6 +62,14 @@ function Navigation() {
       <Link to="/create-auction" className={location.pathname === '/create-auction' ? 'nav-link active' : 'nav-link'}>
         Create Auction
       </Link>
+      <button
+        onClick={handleReset}
+        className="reset-button"
+        disabled={resetting}
+        title="Reset all data (for testing after deployment)"
+      >
+        {resetting ? 'Resetting...' : '🔄 Reset Data'}
+      </button>
       <UserSelector />
     </nav>
   );

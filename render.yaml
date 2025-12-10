@@ -1,0 +1,29 @@
+services:
+  # Backend API Server
+  - type: web
+    name: auction-api
+    runtime: node
+    env: node
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 3000
+      - key: SCHEDULER_INTERVAL
+        value: 5000
+      - key: LOCK_TIMEOUT
+        value: 500
+      - key: BID_GRACE_PERIOD
+        value: 2000
+      - key: MAX_BIDS_PER_MINUTE
+        value: 10
+      - key: MAX_REQUESTS_PER_MINUTE
+        value: 100
+      - key: WS_HEARTBEAT_INTERVAL
+        value: 30000
+      - key: WS_HEARTBEAT_TIMEOUT
+        value: 10000
+      - key: FRONTEND_URL
+        sync: false  # You'll set this after deploying frontend

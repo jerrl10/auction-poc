@@ -135,4 +135,11 @@ export const auctionApi = {
       body: JSON.stringify(data),
     });
   },
+
+  // Admin
+  async resetAllData(): Promise<{ success: boolean; message: string }> {
+    return fetchApi<{ success: boolean; message: string }>('/admin/reset', {
+      method: 'POST',
+    });
+  },
 };

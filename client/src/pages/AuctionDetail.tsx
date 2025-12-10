@@ -18,6 +18,11 @@ interface ToastData {
   id: number;
   message: string;
   type: 'success' | 'error' | 'info' | 'warning';
+  title?: string;
+  action?: {
+    label: string;
+    onClick: () => void;
+  };
 }
 
 export function AuctionDetail() {
@@ -62,8 +67,17 @@ export function AuctionDetail() {
         setAuction(data.auction);
         loadBids();
 
+        const bidderName = userLookup.get(data.bid.userId)?.name || 'Someone';
+        const isCurrentUser = currentUser?.id === data.bid.userId;
+
         if (data.isWinning) {
-          showToast(`New leading bid: ${formatPrice(data.bid.amount)}!`, 'success');
+          showToastEnhanced({
+            title: isCurrentUser ? 'Your Bid is Winning!' : 'New Leading Bid',
+            message: isCurrentUser
+              ? `You're currently winning at ${formatPrice(data.bid.amount)}`
+              : `${bidderName} is now leading at ${formatPrice(data.bid.amount)}`,
+            type: isCurrentUser ? 'success' : 'info',
+          });
         }
       }
     });
@@ -92,7 +106,17 @@ export function AuctionDetail() {
 
     const unsubscribeOutbid = ws.on(WebSocketEvent.YOU_WERE_OUTBID, (data: any) => {
       if (data.auctionId === id && currentUser && data.targetUserId === currentUser.id) {
-        showToast(`You were outbid! New price: ${formatPrice(data.newHighestBid)}`, 'warning');
+        showToastEnhanced({
+          title: 'You have Been Outbid!',
+          message: `Someone bid higher. Current price: ${formatPrice(data.newHighestBid)}`,
+          type: 'warning',
+          action: {
+            label: 'Increase Max Bid',
+            onClick: () => {
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            },
+          },
+        });
       }
     });
 
@@ -157,12 +181,20 @@ export function AuctionDetail() {
 
   async function handlePlaceBid(amount: number, maxBid?: number, autoBidStep?: number) {
     if (!id || !currentUser) {
-      showToast('Please select a user from the top navigation', 'error');
+      showToastEnhanced({
+        title: 'No User Selected',
+        message: 'Please select a user from the top navigation to place a bid',
+        type: 'error',
+      });
       return;
     }
 
     if (auction && currentUser.id === auction.createdBy) {
-      showToast('Auction owners cannot place bids on their own listing', 'error');
+      showToastEnhanced({
+        title: 'Cannot Bid on Your Own Auction',
+        message: 'Auction owners cannot place bids. Switch to a different user in the navigation.',
+        type: 'error',
+      });
       return;
     }
 
@@ -179,15 +211,25 @@ export function AuctionDetail() {
       setAuction(result.auction);
       await loadBids();
 
-      const message = maxBid
-        ? result.isWinning
-          ? `Auto-bid set! Max: ${formatPrice(maxBid)}, Step: ${formatPrice(autoBidStep || 0)}. Currently winning at ${formatPrice(result.auction.currentPrice)}.`
-          : `Auto-bid set! Max: ${formatPrice(maxBid)}, Step: ${formatPrice(autoBidStep || 0)}. You were outbid.`
-        : result.isWinning
-          ? `Bid placed successfully! Current price is ${formatPrice(result.auction.currentPrice)}`
-          : 'Bid placed, but you were outbid immediately.';
-
-      showToast(message, result.isWinning ? 'success' : 'info');
+      if (maxBid) {
+        // Auto-bid placed
+        showToastEnhanced({
+          title: result.isWinning ? 'Auto-Bid Activated!' : 'Auto-Bid Set',
+          message: result.isWinning
+            ? `You're winning at ${formatPrice(result.auction.currentPrice)}. Tradera will bid up to ${formatPrice(maxBid)} for you.`
+            : `Your max bid of ${formatPrice(maxBid)} was not high enough. Consider increasing it.`,
+          type: result.isWinning ? 'success' : 'warning',
+        });
+      } else {
+        // Manual bid placed
+        showToastEnhanced({
+          title: result.isWinning ? 'Bid Successful!' : 'Bid Placed',
+          message: result.isWinning
+            ? `You're now winning at ${formatPrice(result.auction.currentPrice)}`
+            : 'You were outbid immediately. Try a higher bid.',
+          type: result.isWinning ? 'success' : 'info',
+        });
+      }
     } catch (err: any) {
       showToast(err.message, 'error');
     } finally {
@@ -248,6 +290,11 @@ export function AuctionDetail() {
   function showToast(message: string, type: ToastData['type']) {
     const id = Date.now();
     setToasts((prev) => [...prev, { id, message, type }]);
+  }
+
+  function showToastEnhanced(data: Omit<ToastData, 'id'>) {
+    const id = Date.now();
+    setToasts((prev) => [...prev, { id, ...data }]);
   }
 
   function removeToast(id: number) {
@@ -367,6 +414,8 @@ export function AuctionDetail() {
           key={toast.id}
           message={toast.message}
           type={toast.type}
+          title={toast.title}
+          action={toast.action}
           onClose={() => removeToast(toast.id)}
         />
       ))}

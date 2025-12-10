@@ -5,9 +5,12 @@ import { useUser } from '../contexts/UserContext';
 import { getAuctionImageUrl } from '../utils/format';
 import './CreateAuction.css';
 
+type ListingFormat = 'auction' | 'buyNow' | 'auctionAndBuyNow';
+
 export function CreateAuction() {
   const navigate = useNavigate();
   const { currentUser } = useUser();
+  const [listingFormat, setListingFormat] = useState<ListingFormat>('auction');
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [startingPrice, setStartingPrice] = useState('100.00');
@@ -30,24 +33,46 @@ export function CreateAuction() {
       return;
     }
 
-    // Validate pricing
-    const startPriceCents = Math.round(parseFloat(startingPrice) * 100);
-    const reservePriceCents = reservePrice ? Math.round(parseFloat(reservePrice) * 100) : null;
-    const buyNowPriceCents = buyNowPrice ? Math.round(parseFloat(buyNowPrice) * 100) : null;
+    // Validate pricing based on listing format
+    let startPriceCents: number;
+    let reservePriceCents: number | null = null;
+    let buyNowPriceCents: number | null = null;
 
-    if (reservePriceCents && reservePriceCents < startPriceCents) {
-      setError('Reserve price must be greater than or equal to starting price.');
-      return;
-    }
+    if (listingFormat === 'buyNow') {
+      // For Buy Now only, use buyNowPrice as the fixed price
+      if (!buyNowPrice || parseFloat(buyNowPrice) <= 0) {
+        setError('Buy Now price is required for Buy Now listings.');
+        return;
+      }
+      buyNowPriceCents = Math.round(parseFloat(buyNowPrice) * 100);
+      startPriceCents = buyNowPriceCents; // Set starting price same as buy now for consistency
+    } else {
+      // For Auction or Auction + Buy Now
+      startPriceCents = Math.round(parseFloat(startingPrice) * 100);
+      reservePriceCents = reservePrice ? Math.round(parseFloat(reservePrice) * 100) : null;
 
-    if (buyNowPriceCents && buyNowPriceCents < startPriceCents) {
-      setError('Buy Now price must be greater than or equal to starting price.');
-      return;
-    }
+      if (listingFormat === 'auctionAndBuyNow') {
+        if (!buyNowPrice || parseFloat(buyNowPrice) <= 0) {
+          setError('Buy Now price is required for Auction + Buy Now listings.');
+          return;
+        }
+        buyNowPriceCents = Math.round(parseFloat(buyNowPrice) * 100);
+      }
 
-    if (reservePriceCents && buyNowPriceCents && reservePriceCents >= buyNowPriceCents) {
-      setError('Reserve price must be less than Buy Now price.');
-      return;
+      if (reservePriceCents && reservePriceCents < startPriceCents) {
+        setError('Reserve price must be greater than or equal to starting price.');
+        return;
+      }
+
+      if (buyNowPriceCents && buyNowPriceCents < startPriceCents) {
+        setError('Buy Now price must be greater than or equal to starting price.');
+        return;
+      }
+
+      if (reservePriceCents && buyNowPriceCents && reservePriceCents >= buyNowPriceCents) {
+        setError('Reserve price must be less than Buy Now price.');
+        return;
+      }
     }
 
     try {
@@ -160,85 +185,164 @@ export function CreateAuction() {
             </div>
 
             <div className="form-section">
+              <h2>Listing Format</h2>
+              <p className="section-description">Choose how you want to sell your item</p>
+
+              <div className="format-selector">
+                <label className={`format-option ${listingFormat === 'auction' ? 'active' : ''}`}>
+                  <input
+                    type="radio"
+                    name="listingFormat"
+                    value="auction"
+                    checked={listingFormat === 'auction'}
+                    onChange={(e) => setListingFormat(e.target.value as ListingFormat)}
+                  />
+                  <div className="format-content">
+                    <div className="format-icon">🔨</div>
+                    <div className="format-title">Auction</div>
+                    <div className="format-description">Let buyers bid on your item. Highest bidder wins.</div>
+                  </div>
+                </label>
+
+                <label className={`format-option ${listingFormat === 'buyNow' ? 'active' : ''}`}>
+                  <input
+                    type="radio"
+                    name="listingFormat"
+                    value="buyNow"
+                    checked={listingFormat === 'buyNow'}
+                    onChange={(e) => setListingFormat(e.target.value as ListingFormat)}
+                  />
+                  <div className="format-content">
+                    <div className="format-icon">⚡</div>
+                    <div className="format-title">Buy Now</div>
+                    <div className="format-description">Set a fixed price. First buyer gets it instantly.</div>
+                  </div>
+                </label>
+
+                <label className={`format-option ${listingFormat === 'auctionAndBuyNow' ? 'active' : ''}`}>
+                  <input
+                    type="radio"
+                    name="listingFormat"
+                    value="auctionAndBuyNow"
+                    checked={listingFormat === 'auctionAndBuyNow'}
+                    onChange={(e) => setListingFormat(e.target.value as ListingFormat)}
+                  />
+                  <div className="format-content">
+                    <div className="format-icon">🔨⚡</div>
+                    <div className="format-title">Auction + Buy Now</div>
+                    <div className="format-description">Bidding + instant purchase option at fixed price.</div>
+                  </div>
+                </label>
+              </div>
+            </div>
+
+            <div className="form-section">
               <h2>Pricing</h2>
 
-              <div className="form-row">
+              {listingFormat === 'buyNow' ? (
                 <div className="form-group">
-                  <label htmlFor="startingPrice">Starting Price *</label>
+                  <label htmlFor="buyNowPrice">Fixed Price *</label>
                   <div className="input-with-prefix">
                     <span className="prefix">$</span>
                     <input
                       type="number"
-                      id="startingPrice"
-                      value={startingPrice}
-                      onChange={(e) => setStartingPrice(e.target.value)}
+                      id="buyNowPrice"
+                      value={buyNowPrice}
+                      onChange={(e) => setBuyNowPrice(e.target.value)}
                       step="0.01"
                       min="0.01"
+                      placeholder="e.g., 250.00"
                       required
                     />
                   </div>
+                  <small className="form-help">
+                    Set the price buyers will pay to purchase this item immediately.
+                  </small>
                 </div>
+              ) : (
+                <>
+                  <div className="form-row">
+                    <div className="form-group">
+                      <label htmlFor="startingPrice">Starting Price *</label>
+                      <div className="input-with-prefix">
+                        <span className="prefix">$</span>
+                        <input
+                          type="number"
+                          id="startingPrice"
+                          value={startingPrice}
+                          onChange={(e) => setStartingPrice(e.target.value)}
+                          step="0.01"
+                          min="0.01"
+                          required
+                        />
+                      </div>
+                    </div>
 
-                <div className="form-group">
-                  <label htmlFor="minimumBidIncrement">Minimum Bid Increment *</label>
-                  <div className="input-with-prefix">
-                    <span className="prefix">$</span>
-                    <input
-                      type="number"
-                      id="minimumBidIncrement"
-                      value={minimumBidIncrement}
-                      onChange={(e) => setMinimumBidIncrement(e.target.value)}
-                      step="0.01"
-                      min="0.01"
-                      required
-                    />
+                    <div className="form-group">
+                      <label htmlFor="minimumBidIncrement">Minimum Bid Increment *</label>
+                      <div className="input-with-prefix">
+                        <span className="prefix">$</span>
+                        <input
+                          type="number"
+                          id="minimumBidIncrement"
+                          value={minimumBidIncrement}
+                          onChange={(e) => setMinimumBidIncrement(e.target.value)}
+                          step="0.01"
+                          min="0.01"
+                          required
+                        />
+                      </div>
+                    </div>
                   </div>
-                </div>
-              </div>
 
-              <div className="form-group">
-                <label htmlFor="reservePrice">Reserve Price (optional, hidden) 🔒</label>
-                <div className="input-with-prefix">
-                  <span className="prefix">$</span>
-                  <input
-                    type="number"
-                    id="reservePrice"
-                    value={reservePrice}
-                    onChange={(e) => setReservePrice(e.target.value)}
-                    step="0.01"
-                    min={startingPrice}
-                    placeholder="Leave blank for no reserve"
-                  />
-                </div>
-                <small className="form-help">
-                  <strong>What is a reserve price?</strong> A hidden minimum you'll accept. Bidders see only whether it's met, not the actual amount. Protects you from selling too low.
-                  {reservePrice && parseFloat(reservePrice) > 0 && (
-                    <span className="form-help-success"> ✓ Reserve set at ${parseFloat(reservePrice).toFixed(2)}</span>
-                  )}
-                </small>
-              </div>
+                  <div className="form-group">
+                    <label htmlFor="reservePrice">Reserve Price (optional, hidden) 🔒</label>
+                    <div className="input-with-prefix">
+                      <span className="prefix">$</span>
+                      <input
+                        type="number"
+                        id="reservePrice"
+                        value={reservePrice}
+                        onChange={(e) => setReservePrice(e.target.value)}
+                        step="0.01"
+                        min={startingPrice}
+                        placeholder="Leave blank for no reserve"
+                      />
+                    </div>
+                    <small className="form-help">
+                      <strong>What is a reserve price?</strong> A hidden minimum you'll accept. Bidders see only whether it's met, not the actual amount. Protects you from selling too low.
+                      {reservePrice && parseFloat(reservePrice) > 0 && (
+                        <span className="form-help-success"> ✓ Reserve set at ${parseFloat(reservePrice).toFixed(2)}</span>
+                      )}
+                    </small>
+                  </div>
 
-              <div className="form-group">
-                <label htmlFor="buyNowPrice">Buy Now Price (optional) ⚡</label>
-                <div className="input-with-prefix">
-                  <span className="prefix">$</span>
-                  <input
-                    type="number"
-                    id="buyNowPrice"
-                    value={buyNowPrice}
-                    onChange={(e) => setBuyNowPrice(e.target.value)}
-                    step="0.01"
-                    min={reservePrice || startingPrice}
-                    placeholder="Leave blank to disable"
-                  />
-                </div>
-                <small className="form-help">
-                  Set a price where bidders can instantly win and end the auction. Great for items you're willing to sell at a fixed price.
-                  {buyNowPrice && parseFloat(buyNowPrice) > 0 && (
-                    <span className="form-help-success"> ✓ Instant win at ${parseFloat(buyNowPrice).toFixed(2)}</span>
+                  {listingFormat === 'auctionAndBuyNow' && (
+                    <div className="form-group">
+                      <label htmlFor="buyNowPrice">Buy Now Price *</label>
+                      <div className="input-with-prefix">
+                        <span className="prefix">$</span>
+                        <input
+                          type="number"
+                          id="buyNowPrice"
+                          value={buyNowPrice}
+                          onChange={(e) => setBuyNowPrice(e.target.value)}
+                          step="0.01"
+                          min={reservePrice || startingPrice}
+                          placeholder="e.g., 500.00"
+                          required
+                        />
+                      </div>
+                      <small className="form-help">
+                        Set a price where bidders can instantly win and end the auction. Great for items you're willing to sell at a fixed price.
+                        {buyNowPrice && parseFloat(buyNowPrice) > 0 && (
+                          <span className="form-help-success"> ✓ Instant win at ${parseFloat(buyNowPrice).toFixed(2)}</span>
+                        )}
+                      </small>
+                    </div>
                   )}
-                </small>
-              </div>
+                </>
+              )}
             </div>
 
             <div className="form-section">
