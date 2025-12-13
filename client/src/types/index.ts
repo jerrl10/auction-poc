@@ -2,6 +2,7 @@ export enum AuctionStatus {
   PENDING = 'PENDING',
   ACTIVE = 'ACTIVE',
   ENDED = 'ENDED',
+  UNSOLD = 'UNSOLD',
 }
 
 export interface Auction {
@@ -44,6 +45,8 @@ export interface Bid {
   isRetracted: boolean;
   retractedAt: string | null;
   retractionReason: BidRetractionReason | null;
+  message?: string;
+  isMaxBidReached?: boolean;
 }
 
 export interface User {

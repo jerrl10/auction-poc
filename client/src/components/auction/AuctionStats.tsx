@@ -9,6 +9,7 @@ export function AuctionStats({ auction }: AuctionStatsProps) {
   const hasBuyNow = auction.buyNowPrice !== null;
   const buyNowPrice = auction.buyNowPrice ?? 0;
   const hasReserve = auction.reservePrice !== null;
+  const hadBuyNow = auction.bidCount > 0 && !hasBuyNow;
 
   return (
     <div className="auction-stats-card">
@@ -37,6 +38,20 @@ export function AuctionStats({ auction }: AuctionStatsProps) {
           </div>
         )}
       </div>
+
+      {hadBuyNow && (
+        <div className="info-banner buy-now-removed">
+          <div className="info-icon">ℹ️</div>
+          <div className="info-content">
+            <div className="info-title">Buy It Now No Longer Available</div>
+            <div className="info-description">
+              {hasReserve && auction.reserveMet
+                ? 'Buy Now was removed when the reserve price was met.'
+                : 'Buy Now was removed when the first bid was placed.'}
+            </div>
+          </div>
+        </div>
+      )}
 
       {hasReserve && (
         <div className={`reserve-status-banner ${auction.reserveMet ? 'met' : 'not-met'}`}>

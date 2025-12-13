@@ -291,15 +291,19 @@ class AuctionService {
   }
 
   /**
-   * End an auction (ACTIVE -> ENDED)
+   * End an auction (ACTIVE -> ENDED or UNSOLD)
    * Called by scheduler or manually
-   * Determines winner if bids exist
+   * Determines winner if bids exist and reserve price is met
+   *
+   * - If reserve price not met, auction status becomes UNSOLD (no winner)
+   * - If reserve price met (or no reserve), determine winner
+   * - Final price is already correct (second-price logic applied during bidding)
    */
   async endAuction(auctionId: string): Promise<Auction> {
     const auction = this.getAuction(auctionId);
 
-    if (auction.status === AuctionStatus.ENDED) {
-      logger.warn(`Auction already ended: ${auctionId}`);
+    if (auction.status === AuctionStatus.ENDED || auction.status === AuctionStatus.UNSOLD) {
+      logger.warn(`Auction already ended: ${auctionId} (${auction.status})`);
       return auction;
     }
 
@@ -310,17 +314,38 @@ class AuctionService {
       );
     }
 
-    // Determine winner
-    const winnerId = this.determineWinner(auctionId);
+    // Check if reserve price was met
+    const hasReservePrice = auction.reservePrice !== null;
+    const reserveMet = !hasReservePrice || auction.currentPrice >= auction.reservePrice!;
+
+    let status: AuctionStatus;
+    let winnerId: string | null;
+
+    if (!reserveMet) {
+      // Reserve price not met - auction becomes UNSOLD
+      status = AuctionStatus.UNSOLD;
+      winnerId = null;
+      logger.info(
+        `Auction ended UNSOLD: ${auctionId} ` +
+        `(reserve: $${auction.reservePrice! / 100}, highest bid: $${auction.currentPrice / 100})`
+      );
+    } else {
+      // Reserve met or no reserve - determine winner
+      status = AuctionStatus.ENDED;
+      winnerId = this.determineWinner(auctionId);
+      logger.info(
+        `Auction ended: ${auctionId}, Winner: ${winnerId || 'none'}, ` +
+        `Final price: $${auction.currentPrice / 100}`
+      );
+    }
 
     const updated: Auction = {
       ...auction,
-      status: AuctionStatus.ENDED,
+      status,
       winnerId,
     };
 
     dataStore.updateAuction(updated);
-    logger.info(`Auction ended: ${auctionId}, Winner: ${winnerId || 'none'}`);
 
     return updated;
   }

@@ -5,6 +5,7 @@ export enum AuctionStatus {
   PENDING = 'PENDING',   // Created but not started
   ACTIVE = 'ACTIVE',     // Accepting bids
   ENDED = 'ENDED',       // Closed, winner determined
+  UNSOLD = 'UNSOLD',     // Ended but reserve price not met
 }
 
 /**
@@ -56,6 +57,8 @@ export interface Bid {
   isRetracted: boolean;         // True if bid was retracted/cancelled
   retractedAt: Date | null;     // Timestamp when retracted
   retractionReason: BidRetractionReason | null; // Reason for retraction
+  message?: string;             // Optional message for bid notifications (e.g., "You've placed your max bid")
+  isMaxBidReached?: boolean;    // True if this bid represents reaching the user's max bid
 }
 
 /**

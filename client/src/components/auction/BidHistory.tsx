@@ -20,12 +20,41 @@ export function BidHistory({ bids, userLookup, auctionStatus, onBidRetracted }: 
   const getBidderLabel = (userId: string) =>
     userLookup.get(userId)?.name || `${userId.substring(0, 10)}...`;
 
+  // Filter bids to show only visible price changes
+  // Only show bids that actually changed the visible price
+  const getVisibleBids = (): Bid[] => {
+    if (bids.length === 0) return [];
+
+    const sortedBids = [...bids].sort((a, b) =>
+      new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+    );
+    const visibleBids: Bid[] = [];
+    let lastVisiblePrice = 0;
+
+    for (const bid of sortedBids) {
+      // Skip retracted bids
+      if (bid.isRetracted) continue;
+
+      // Show bid if it changed the visible price
+      if (bid.amount > lastVisiblePrice) {
+        visibleBids.push(bid);
+        lastVisiblePrice = bid.amount;
+      }
+    }
+
+    // Return in reverse order (newest first) for display
+    return visibleBids.reverse();
+  };
+
+  const visibleBids = getVisibleBids();
+
   useEffect(() => {
     if (!currentUser || auctionStatus === 'ENDED') return;
 
     const checkRetractionEligibility = async () => {
       const map = new Map();
 
+      // Check retraction eligibility for all user's bids (not just visible ones)
       for (const bid of bids) {
         if (bid.userId === currentUser.id && !bid.isRetracted) {
           try {
@@ -81,25 +110,26 @@ export function BidHistory({ bids, userLookup, auctionStatus, onBidRetracted }: 
 
   return (
     <div className="bid-history-card">
-      <h2>Bid History ({bids.length})</h2>
-      {bids.length === 0 ? (
+      <h2>Bid History ({visibleBids.length})</h2>
+      {visibleBids.length === 0 ? (
         <p className="no-bids">No bids yet. Be the first!</p>
       ) : (
         <div className="bid-history-list">
-          {bids.map((bid) => {
+          {visibleBids.map((bid, index) => {
             const isOwnBid = currentUser?.id === bid.userId;
             const canRetractInfo = canRetractMap.get(bid.id);
             const showRetractButton = isOwnBid && canRetractInfo?.canRetract && auctionStatus === 'ACTIVE';
+            const isCurrentlyLeading = index === 0 && !bid.isRetracted; // First in list (newest) is leading
 
             return (
               <div
                 key={bid.id}
-                className={`bid-item ${bid.isWinning ? 'winning' : ''} ${bid.isRetracted ? 'retracted' : ''}`}
+                className={`bid-item ${isCurrentlyLeading ? 'winning' : ''} ${bid.isRetracted ? 'retracted' : ''}`}
               >
                 <div className="bid-user">
-                  {bid.isWinning && !bid.isRetracted && <span className="winning-badge">WINNING</span>}
+                  {isCurrentlyLeading && !bid.isRetracted && <span className="winning-badge">LEADING</span>}
                   {bid.isRetracted && <span className="retracted-badge">RETRACTED</span>}
-                  {bid.isProxyBid && <span className="proxy-badge">AUTO</span>}
+                  <span className="proxy-badge">AUTO-BID</span>
                   <span className="user-id">{getBidderLabel(bid.userId)}</span>
                 </div>
                 <div className="bid-details">

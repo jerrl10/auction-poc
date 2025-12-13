@@ -1,42 +1,75 @@
 import { Bid, Auction } from '../types';
 import { dataStore } from './dataStore';
 import { logger } from '../utils/logger';
-import { getBidIncrement, getMinimumNextBid } from '../utils/bidLadder';
+import { ensureValidCents } from '../utils/currency';
+import { getBidIncrement } from '../utils/bidIncrement';
 
 /**
- * Proxy Bidding Service
+ * Proxy Bidding Service - Tradera-Style Second-Price Auctions
  *
- * Implements automatic bidding logic where:
- * - Users set a maximum bid
- * - System automatically bids the minimum necessary to stay winning
- * - When outbid, system auto-bids up to user's maximum
+ * CORE CONCEPT: Second-Price Logic
+ * ================================
+ * Winner pays: second-highest max bid + increment (NOT their own max bid)
  *
- * This creates a second-price auction mechanism similar to eBay
+ * This is the fundamental principle of Tradera/eBay proxy bidding:
+ * - Users enter their TRUE maximum willingness to pay
+ * - System automatically bids the MINIMUM needed to win
+ * - Winner pays just enough to beat the second-place bidder
+ *
+ * IMPLEMENTATION:
+ * ===============
+ * When User B places a max bid higher than User A's max:
+ * 1. System creates an auto-bid for User A at their MAX (shows "max reached")
+ * 2. System creates a winning bid for User B at: A's max + increment
+ * 3. The visible price becomes: A's max + increment (second-price!)
+ * 4. User B wins but pays less than their max (incentivizes honest bidding)
+ *
+ * EXAMPLE FLOW:
+ * =============
+ * Starting: $100, increment: $10
+ * - User A max $200 → visible bid: $110 (no competition, bid minimum)
+ * - User B max $300 → User A auto-bids to $200 (max reached), User B bids $210
+ *   Result: B wins, pays $210 (not $300!)
+ *
+ * BENEFITS:
+ * =========
+ * - Encourages bidders to enter their true maximum
+ * - Prevents "bid sniping" strategy from being effective
+ * - Fair price discovery through competitive bidding
+ * - Winners pay market price, not their private valuation
  */
 
 interface ProxyBidResult {
-  actualBidAmount: number;      // The amount actually bid
+  actualBidAmount: number;      // The amount this user will bid
   isProxyActivated: boolean;    // Whether proxy bidding was used
   wouldWin: boolean;            // Whether this bid would win
   nextIncrementNeeded: number;  // Next amount needed to win
+  message?: string;             // Optional message for the user
+  isMaxBidReached?: boolean;    // True if user's max bid was reached
+  competitorBids?: Array<{      // Bids that should be auto-placed for competitors
+    userId: string;
+    amount: number;
+    maxBid: number;
+    message: string;
+    isMaxBidReached: boolean;
+  }>;
 }
 
 class ProxyBiddingService {
   /**
-   * Calculate optimal bid amount based on Tradera proxy bidding logic
+   * Calculate proxy bid with transparent max bid notifications
    *
-   * TRADERA LOGIC:
-   * - When you place a max bid, the system looks at ALL other users' max bids
-   * - You bid the MINIMUM needed to beat the highest competing MAX BID
-   * - NO incremental counter-bidding chains
+   * NEW IMPROVED LOGIC:
+   * - When placing a max bid, show when competitors' max bids are reached
+   * - Losing bidder gets auto-bid to their max with notification
+   * - Winner bids one increment above loser's max
+   * - Provides much better user experience and transparency
    *
    * Example:
-   * - Auction starts at 100
-   * - User A sets max 150 → actual bid: 110 (minimum needed)
-   * - User B sets max 200 → actual bid: 160 (A's max 150 + 1 increment = 160)
-   * - No further auto-bidding because B's max (200) > A's max (150)
-   *
-   * The key: Compare MAX BIDS, not actual bid amounts
+   * - Starting: $100
+   * - User1 max $160 → bids $110 (no competition)
+   * - User2 max $200 → User1 auto-bids to $160 (msg: "max reached"), User2 bids $170
+   * - User1 max $240 → User2 auto-bids to $200 (msg: "max reached"), User1 bids $210
    */
   calculateProxyBidAmount(
     auction: Auction,
@@ -45,74 +78,138 @@ class ProxyBiddingService {
     customStep?: number
   ): ProxyBidResult {
     const allBids = dataStore.getBidsForAuction(auction.id);
+    // Use dynamic bid increment based on current price, or custom step if provided
+    const bidIncrement = customStep || getBidIncrement(auction.currentPrice);
 
     // Filter out user's own bids to find competing bids
     const competingBids = allBids.filter(bid => bid.userId !== userId);
 
-    // If no competing bids, bid the minimum required (like Tradera)
+    // If no competing bids, bid the minimum required
     if (competingBids.length === 0) {
-      const minRequired = getMinimumNextBid(auction.currentPrice);
+      const minRequired = ensureValidCents(auction.currentPrice + bidIncrement);
+      let actualBid = ensureValidCents(Math.min(userMaxBid, minRequired));
 
-      // Bid only the minimum needed, not the full max
-      const actualBid = Math.min(userMaxBid, minRequired);
+      // First bidder: check if max meets reserve (Tradera Spec)
+      // Note: First bid does NOT jump to reserve, it stays at start + increment
+      // Reserve is only checked for subsequent bids
+      const isMaxReached = actualBid === userMaxBid && actualBid < minRequired;
 
       return {
         actualBidAmount: actualBid,
         isProxyActivated: true,
         wouldWin: actualBid >= minRequired,
-        nextIncrementNeeded: minRequired,
+        nextIncrementNeeded: ensureValidCents(actualBid + bidIncrement),
+        message: isMaxReached ? `You've placed your max bid of $${(userMaxBid / 100).toFixed(2)}` : undefined,
+        isMaxBidReached: isMaxReached,
+        competitorBids: [],
       };
     }
 
-    // CRITICAL: Find the highest MAX BID from competitors (not highest actual bid)
+    // Find the highest competing MAX BID
     const competingMaxBids = competingBids
       .filter(bid => bid.maxBid !== null)
-      .map(bid => bid.maxBid!);
+      .map(bid => ({ userId: bid.userId, maxBid: bid.maxBid! }));
 
     // If no competing max bids exist, just beat the current price
     if (competingMaxBids.length === 0) {
-      const minRequired = getMinimumNextBid(auction.currentPrice);
-      const actualBid = Math.min(userMaxBid, minRequired);
+      const minRequired = ensureValidCents(auction.currentPrice + bidIncrement);
+      const actualBid = ensureValidCents(Math.min(userMaxBid, minRequired));
+      const isMaxReached = actualBid === userMaxBid && actualBid < minRequired;
 
       return {
         actualBidAmount: actualBid,
         isProxyActivated: true,
         wouldWin: actualBid >= minRequired,
-        nextIncrementNeeded: minRequired,
+        nextIncrementNeeded: ensureValidCents(actualBid + bidIncrement),
+        message: isMaxReached ? `You've placed your max bid of $${(userMaxBid / 100).toFixed(2)}` : undefined,
+        isMaxBidReached: isMaxReached,
+        competitorBids: [],
       };
     }
 
-    // Get the highest competing MAX BID
-    const highestCompetingMaxBid = Math.max(...competingMaxBids);
+    // Get the highest competing max bid
+    const highestCompetitor = competingMaxBids.reduce((highest, current) =>
+      current.maxBid > highest.maxBid ? current : highest
+    );
 
-    // Calculate the increment based on the highest competing max bid
-    const bidIncrement = customStep || getBidIncrement(highestCompetingMaxBid);
+    // ============================================================================
+    // SECOND-PRICE LOGIC IMPLEMENTATION (Core of Tradera bidding)
+    // ============================================================================
+    // When user's max bid beats competitor's max bid:
+    // 1. Competitor bids their full max amount (transparent, shows "max reached")
+    // 2. User bids: competitor's max + increment (second-price!)
+    // 3. User wins but pays LESS than their max bid
+    //
+    // RESERVE PRICE HANDLING (Tradera Spec Scenario 3):
+    // - When winner's max bid meets/exceeds reserve
+    // - And calculated price < reserve
+    // - Jump visible price to reserve
+    //
+    // This implements the Vickrey auction principle where winner pays the
+    // second-highest price, encouraging truthful bidding.
+    // ============================================================================
+    if (userMaxBid > highestCompetitor.maxBid) {
+      // User wins - competitor bids their max, user bids one increment above
+      const competitorMaxReachedBid = {
+        userId: highestCompetitor.userId,
+        amount: ensureValidCents(highestCompetitor.maxBid),
+        maxBid: ensureValidCents(highestCompetitor.maxBid),
+        message: `Your max bid of $${(highestCompetitor.maxBid / 100).toFixed(2)} has been reached`,
+        isMaxBidReached: true,
+      };
 
-    // TRADERA LOGIC: Bid one increment above the highest competing MAX BID
-    const amountToWin = highestCompetingMaxBid + bidIncrement;
+      // SECOND-PRICE FORMULA: winner pays (loser's max + increment)
+      let userBidAmount = ensureValidCents(highestCompetitor.maxBid + bidIncrement);
 
-    // If user's max bid can beat the highest competing max bid
-    if (userMaxBid >= amountToWin) {
-      const nextIncrement = getBidIncrement(amountToWin);
+      // RESERVE PRICE CHECK (Tradera Spec):
+      // If winner's max meets/exceeds reserve, and calculated price < reserve,
+      // jump visible price to reserve
+      const hasReservePrice = auction.reservePrice !== null && auction.reservePrice > 0;
+      if (hasReservePrice && userMaxBid >= auction.reservePrice!) {
+        if (userBidAmount < auction.reservePrice!) {
+          userBidAmount = ensureValidCents(auction.reservePrice!);
+          logger.info(
+            `🔒 Reserve price triggered: User max (${userMaxBid / 100}) >= reserve (${auction.reservePrice! / 100}), ` +
+            `calculated price (${(highestCompetitor.maxBid + bidIncrement) / 100}) < reserve, ` +
+            `jumping to reserve: ${userBidAmount / 100}`
+          );
+        }
+      }
 
       return {
-        actualBidAmount: amountToWin,
+        actualBidAmount: userBidAmount,
         isProxyActivated: true,
         wouldWin: true,
-        nextIncrementNeeded: amountToWin + nextIncrement,
+        nextIncrementNeeded: ensureValidCents(userBidAmount + bidIncrement),
+        message: undefined, // User is winning, no special message
+        isMaxBidReached: false,
+        competitorBids: [competitorMaxReachedBid],
+      };
+    } else if (userMaxBid === highestCompetitor.maxBid) {
+      // Tie - both at same max, earlier timestamp wins
+      // User placing same max as current winner doesn't win
+      // Price stays the same (Tradera Spec Scenario 4)
+      return {
+        actualBidAmount: ensureValidCents(userMaxBid),
+        isProxyActivated: true,
+        wouldWin: false, // Earlier bidder keeps winning
+        nextIncrementNeeded: ensureValidCents(userMaxBid + bidIncrement),
+        message: `You've placed your max bid of $${(userMaxBid / 100).toFixed(2)}, but you're tied with another bidder who bid first`,
+        isMaxBidReached: true,
+        competitorBids: [], // No price change, no new bids for competitor
+      };
+    } else {
+      // User loses - user bids their max, competitor still wins
+      return {
+        actualBidAmount: ensureValidCents(userMaxBid),
+        isProxyActivated: true,
+        wouldWin: false,
+        nextIncrementNeeded: ensureValidCents(highestCompetitor.maxBid + bidIncrement),
+        message: `You've placed your max bid of $${(userMaxBid / 100).toFixed(2)}`,
+        isMaxBidReached: true,
+        competitorBids: [],
       };
     }
-
-    // User's max bid isn't high enough to beat the highest competing max bid
-    // Bid their maximum anyway (they'll be outbid)
-    const nextIncrement = getBidIncrement(highestCompetingMaxBid);
-
-    return {
-      actualBidAmount: userMaxBid,
-      isProxyActivated: true,
-      wouldWin: false,
-      nextIncrementNeeded: highestCompetingMaxBid + nextIncrement,
-    };
   }
 
   /**

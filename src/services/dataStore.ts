@@ -95,6 +95,13 @@ class DataStore {
   }
 
   /**
+   * Get all bids across all auctions
+   */
+  getAllBids(): Bid[] {
+    return Array.from(this.bids.values()).flat();
+  }
+
+  /**
    * Get auctions by status
    */
   getAuctionsByStatus(status: AuctionStatus): Auction[] {
@@ -310,6 +317,7 @@ class DataStore {
         [AuctionStatus.PENDING]: this.getAuctionsByStatus(AuctionStatus.PENDING).length,
         [AuctionStatus.ACTIVE]: this.getAuctionsByStatus(AuctionStatus.ACTIVE).length,
         [AuctionStatus.ENDED]: this.getAuctionsByStatus(AuctionStatus.ENDED).length,
+        [AuctionStatus.UNSOLD]: this.getAuctionsByStatus(AuctionStatus.UNSOLD).length,
       },
     };
   }

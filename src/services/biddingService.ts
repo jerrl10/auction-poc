@@ -6,7 +6,7 @@ import { websocketService } from './websocketService';
 import { proxyBiddingService } from './proxyBiddingService';
 import { generateId } from '../utils/generateId';
 import { logger } from '../utils/logger';
-import { getBidIncrement, getMinimumNextBid } from '../utils/bidLadder';
+import { getBidIncrement } from '../utils/bidIncrement';
 
 /**
  * Bidding Service
@@ -76,6 +76,9 @@ class BiddingService {
       // 4. Determine actual bid amount using proxy bidding logic if applicable
       let actualBidAmount = inputAmount;
       let userMaxBid: number | null = null;
+      let bidMessage: string | undefined = undefined;
+      let isMaxBidReached: boolean = false;
+      let competitorBids: Array<any> = [];
 
       if (isProxyBid) {
         userMaxBid = maxBid;
@@ -89,22 +92,78 @@ class BiddingService {
         );
 
         actualBidAmount = proxyResult.actualBidAmount;
+        bidMessage = proxyResult.message;
+        isMaxBidReached = proxyResult.isMaxBidReached || false;
+        competitorBids = proxyResult.competitorBids || [];
 
         logger.info(
           `Proxy bid calculated: $${actualBidAmount / 100} ` +
-          `(user max: $${maxBid / 100}, step: $${(autoBidStep || auction.minimumBidIncrement) / 100}, would win: ${proxyResult.wouldWin})`
+          `(user max: $${maxBid / 100}, step: $${(autoBidStep || getBidIncrement(auction.currentPrice)) / 100}, would win: ${proxyResult.wouldWin})` +
+          (bidMessage ? ` - Message: ${bidMessage}` : '')
         );
       }
 
       // 5. Validate bid amount
       this.validateBidAmount(auction, actualBidAmount);
 
-      // 6. Get existing bids to determine if this will be winning
+      // 6. Place competitor bids first (if any) - these are auto-bids for users whose max was reached
+      const placedCompetitorBids: Bid[] = [];
+      if (competitorBids.length > 0) {
+        logger.info(`📊 Placing ${competitorBids.length} competitor max-reached bid(s) before user's bid`);
+
+        for (const competitorBid of competitorBids) {
+          const existingBids = dataStore.getBidsForAuction(auctionId);
+          const compIsWinning = this.isWinningBid(existingBids, competitorBid.amount);
+
+          const compBid: Bid = {
+            id: generateId('bid'),
+            auctionId,
+            userId: competitorBid.userId,
+            amount: competitorBid.amount,
+            maxBid: competitorBid.maxBid,
+            autoBidStep: autoBidStep || null,
+            timestamp: new Date(),
+            isWinning: compIsWinning,
+            isProxyBid: true,
+            isRetracted: false,
+            retractedAt: null,
+            retractionReason: null,
+            message: competitorBid.message,
+            isMaxBidReached: competitorBid.isMaxBidReached,
+          };
+
+          dataStore.createBid(compBid);
+
+          // Update auction stats (price only if winning)
+          if (compIsWinning) {
+            auctionService.updateAuctionStats(auctionId, competitorBid.amount);
+            const existingBidsBeforeUpdate = dataStore.getBidsForAuction(auctionId);
+            this.updatePreviousWinningBids(existingBidsBeforeUpdate.filter(b => b.id !== compBid.id));
+          } else {
+            // Still increment bid count even if not winning
+            const currentAuction = auctionService.getAuction(auctionId);
+            const updated: Auction = {
+              ...currentAuction,
+              bidCount: currentAuction.bidCount + 1,
+            };
+            dataStore.updateAuction(updated);
+          }
+
+          placedCompetitorBids.push(compBid);
+
+          logger.info(`📢 Competitor max-reached bid: User ${competitorBid.userId} -> $${competitorBid.amount / 100} (${competitorBid.message})`);
+        }
+      }
+
+      // 7. Get existing bids to determine if this will be winning
       const existingBids = dataStore.getBidsForAuction(auctionId);
-      const isWinning = this.isWinningBid(existingBids, actualBidAmount);
+      // Exclude user's own bids when determining if new bid is winning
+      // This allows leader to raise their max without losing leadership (Tradera Spec Scenario 5)
+      const competingBids = existingBids.filter(b => b.userId !== userId);
+      const isWinning = this.isWinningBid(competingBids, actualBidAmount);
       const previousWinnerId = existingBids.find(b => b.isWinning)?.userId;
 
-      // 7. Create bid
+      // 8. Create user's bid
       const bid: Bid = {
         id: generateId('bid'),
         auctionId,
@@ -118,28 +177,82 @@ class BiddingService {
         isRetracted: false,
         retractedAt: null,
         retractionReason: null,
+        message: bidMessage,
+        isMaxBidReached,
       };
 
-      // 8. Save bid to data store
+      // 9. Save user's bid to data store
       dataStore.createBid(bid);
 
-      // 9. Update auction stats (current price, bid count)
-      auctionService.updateAuctionStats(auctionId, actualBidAmount);
-
-      // 10. Mark previous winning bids as no longer winning
+      // 10. Update auction stats (current price only if winning, bid count always)
+      // TRADERA SPEC: Price only changes when a new winning bid is placed
       if (isWinning) {
-        this.updatePreviousWinningBids(existingBids);
+        auctionService.updateAuctionStats(auctionId, actualBidAmount);
+      } else {
+        // Still increment bid count even if not winning
+        const auction = auctionService.getAuction(auctionId);
+        const updated: Auction = {
+          ...auction,
+          bidCount: auction.bidCount + 1,
+        };
+        dataStore.updateAuction(updated);
       }
 
-      // 11. Get updated auction
-      const updatedAuction = auctionService.getAuction(auctionId);
+      // 11. Mark previous winning bids as no longer winning
+      if (isWinning) {
+        const bidsToUpdate = existingBids.filter(b => b.id !== bid.id);
+        this.updatePreviousWinningBids(bidsToUpdate);
+      }
+
+      // 12. Get updated auction
+      let updatedAuction = auctionService.getAuction(auctionId);
+
+      // 13. Buy Now Removal Logic (Tradera Spec Scenario 3)
+      // Rule 1: Auction WITHOUT reserve - remove Buy Now on first bid
+      // Rule 2: Auction WITH reserve - remove Buy Now when reserve is met
+      if (updatedAuction.buyNowPrice !== null) {
+        const hasReservePrice = updatedAuction.reservePrice !== null && updatedAuction.reservePrice > 0;
+        let shouldRemoveBuyNow = false;
+
+        if (!hasReservePrice) {
+          // No reserve: Remove Buy Now on first bid (any bid removes it)
+          shouldRemoveBuyNow = true;
+          logger.info(`🛒 Buy Now removed: First bid placed (no reserve price)`);
+        } else if (updatedAuction.reserveMet) {
+          // Has reserve: Remove Buy Now when reserve is met
+          shouldRemoveBuyNow = true;
+          logger.info(
+            `🛒 Buy Now removed: Reserve price met ` +
+            `(reserve: $${updatedAuction.reservePrice! / 100}, current: $${updatedAuction.currentPrice / 100})`
+          );
+        }
+
+        if (shouldRemoveBuyNow) {
+          const auctionWithoutBuyNow: Auction = {
+            ...updatedAuction,
+            buyNowPrice: null,
+          };
+          dataStore.updateAuction(auctionWithoutBuyNow);
+          updatedAuction = auctionWithoutBuyNow;
+        }
+      }
 
       logger.info(
         `Bid placed: ${bid.id} (${isWinning ? 'WINNING' : 'outbid'}) ` +
         `- Auction ${auctionId} now at $${actualBidAmount / 100}`
       );
 
-      // 12. Broadcast bid placed event via WebSocket
+      // 14. Broadcast competitor max-reached bids first
+      for (const compBid of placedCompetitorBids) {
+        websocketService.broadcastBidPlaced({
+          bid: compBid,
+          auction: updatedAuction,
+          isWinning: compBid.isWinning,
+          previousWinnerId: undefined,
+        });
+      }
+
+      // 15. Broadcast user's bid placed event via WebSocket
       websocketService.broadcastBidPlaced({
         bid,
         auction: updatedAuction,
@@ -147,72 +260,19 @@ class BiddingService {
         previousWinnerId,
       });
 
-      // 13. Prepare counter-bids data (but don't process yet - lock must be released first)
-      let counterBids: Array<{userId: string; amount: number; maxBid: number | null; autoBidStep: number | null}> = [];
-      if (isWinning) {
-        counterBids = await proxyBiddingService.triggerProxyCounterBids(
-          updatedAuction,
-          bid
-        );
-      }
-
-      // 14. Check for buy-now completion
-      const shouldTriggerBuyNow = updatedAuction.buyNowPrice !== null && actualBidAmount >= updatedAuction.buyNowPrice;
-
       return {
         bid,
         auction: updatedAuction,
         isWinning,
-        counterBids,
-        shouldTriggerBuyNow,
+        competitorBids: placedCompetitorBids,
       };
     });
 
-    // Step 2: Process counter-bids AFTER lock is released
-    let finalAuction = result.auction;
-
-    if (result.counterBids.length > 0) {
-      logger.info(`${depthPrefix}Processing ${result.counterBids.length} counter-bid(s) after lock release`);
-
-      for (const counterBid of result.counterBids) {
-        try {
-          // Recursively place the counter-bid with incremented depth
-          const counterResult = await this.placeBid({
-            auctionId,
-            userId: counterBid.userId,
-            amount: counterBid.amount,
-            maxBid: counterBid.maxBid!,
-            autoBidStep: counterBid.autoBidStep || undefined,
-            _recursionDepth: _recursionDepth + 1,
-          });
-
-          logger.info(
-            `${depthPrefix}✅ Proxy counter-bid placed: User ${counterBid.userId} auto-bid $${counterBid.amount / 100}`
-          );
-
-          // Update our reference to the auction
-          finalAuction = counterResult.auction;
-        } catch (error) {
-          logger.warn(`${depthPrefix}❌ Proxy counter-bid failed for user ${counterBid.userId}:`, error);
-        }
-      }
-    }
-
-    // Step 3: Trigger buy-now completion if needed
-    if (result.shouldTriggerBuyNow) {
-      const endedAuction = await auctionService.endAuction(auctionId);
-      finalAuction = endedAuction;
-
-      websocketService.broadcastAuctionEnded({
-        auction: endedAuction,
-        winnerId: endedAuction.winnerId,
-        finalPrice: endedAuction.currentPrice,
-      });
-    }
-
+    // Step 2: Return final auction state
+    // Note: Buy Now is manually triggered via separate endpoint, not automatically
     return {
       bid: result.bid,
-      auction: finalAuction,
+      auction: result.auction,
       isWinning: result.isWinning,
     };
   }
@@ -275,16 +335,14 @@ class BiddingService {
 
   /**
    * Calculate minimum valid bid amount for an auction
-   * Uses the dynamic bid ladder instead of fixed increment
    */
   getMinimumBidAmount(auctionId: string): number {
     const auction = auctionService.getAuction(auctionId);
-    return getMinimumNextBid(auction.currentPrice);
+    return auction.currentPrice + getBidIncrement(auction.currentPrice);
   }
 
   /**
    * Get the current bid increment for an auction
-   * Based on Tradera/eBay-style bid ladder
    */
   getCurrentBidIncrement(auctionId: string): number {
     const auction = auctionService.getAuction(auctionId);
@@ -311,10 +369,6 @@ class BiddingService {
 
     if (now >= auction.endTime) {
       throw new AuctionError('Auction has already ended', ErrorCode.AUCTION_ENDED);
-    }
-
-    if (auction.buyNowPrice !== null && auction.currentPrice >= auction.buyNowPrice) {
-      throw new AuctionError('Auction already sold via Buy Now price', ErrorCode.AUCTION_ENDED);
     }
   }
 
@@ -344,7 +398,6 @@ class BiddingService {
 
   /**
    * Validate bid amount meets requirements
-   * Uses dynamic bid ladder for minimum increment validation
    */
   private validateBidAmount(auction: Auction, amount: number): void {
     // Amount must be positive
@@ -352,9 +405,9 @@ class BiddingService {
       throw new AuctionError('Bid amount must be positive', ErrorCode.VALIDATION_ERROR);
     }
 
-    // Use bid ladder to calculate minimum bid
-    const minimumBid = getMinimumNextBid(auction.currentPrice);
+    // Calculate minimum bid using dynamic increment
     const bidIncrement = getBidIncrement(auction.currentPrice);
+    const minimumBid = auction.currentPrice + bidIncrement;
 
     if (amount < minimumBid) {
       throw new AuctionError(
